@@ -3,9 +3,10 @@
 本仓库基于 [ch6vip/fqapp](https://github.com/ch6vip/fqapp)，保存 iOS 移植源码和 macOS 自动续签工具，沿用 [GPL-3.0 许可证](LICENSE)。原项目的 Android、Flutter、Rust 与原生模块一并保留。
 
 - **iOS 源码版本**：1.0.127（132），最低 iOS 16.0。
+- **IPA 下载**：[iOS 侧载预览安装包](https://github.com/skymoonzyj/fqapp-ios/releases/tag/ios-v1.0.127-build132)。这是未签名 IPA，需使用安装者自己的 Apple 账号重新签名后安装；安装说明和 SHA-256 校验文件随包提供。
 - **开发入口**：[iOS 构建与验证](scripts/README.md#ios-本地构建与来源证据)，包含模拟器构建、未签名设备归档和校验脚本。
 - **自动续签**：[macOS 工具源码与配置说明](tools/autorenew/README.md)。Mac 登录后在后台检查，签名剩余不足 48 小时时尝试续签，支持已配对 iPhone 的 USB 或局域网连接。
-- **交付状态**：已完成本地设备安装、首页启动和无线自动续签验证；本仓库上传的是源码，未发布 TestFlight、App Store 或可直接安装的 IPA。
+- **交付状态**：已完成本地设备安装、首页启动和无线自动续签验证；仓库提供源码及侧载预览 IPA，尚未发布 TestFlight 或 App Store。IPA 从来源记录中的原始 iOS 设备归档封装，本次没有重新编译或在新设备安装。
 - **本地资料**：证书、描述文件、Apple 账号配置、设备标识、构建产物与实机日志不入库。旧提交历史保留在本地，本仓库从经过检查的完整源码快照开始；来源记录见 [SOURCE_PROVENANCE.json](SOURCE_PROVENANCE.json)。
 
 下方保留原项目说明，其中 APK 下载与 Android 安装步骤指向上游项目。
