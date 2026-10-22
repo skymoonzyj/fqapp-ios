@@ -15,6 +15,6 @@
     "version": "1.0.127",
     "build": "132",
     "signing": "unsigned; installer must re-sign using their own Apple account",
-    "packaging": "Existing verified device archive repackaged as Payload/Runner.app without changing App files."
+    "packaging": "Existing verified device archive repackaged as Payload/Runner.app; all file contents unchanged; App.framework/App executable mode normalized from 0644 to 0755."
   }
 }
