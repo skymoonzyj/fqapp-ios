@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "bundle_id": "com.fqapp.fqapp",
+  "team_id": "TEAMID1234",
+  "device_udid": "FAKE0000-DEVICE000000000001",
+  "version": "1.0.127",
+  "build": "132",
+  "source_app": "/ABSOLUTE/PATH/TO/UNSIGNED/Runner.app",
+  "provisioning_project": "/ABSOLUTE/PATH/TO/LOCAL/profile-preparation/ProfilePreparation.xcodeproj",
+  "provisioning_scheme": "ProfilePreparation",
+  "allowed_certificate_sha1": ["0000000000000000000000000000000000000000"],
+  "renewal_window_hours": 48,
+  "profile_cache_dirs": [
+    "/ABSOLUTE/PATH/TO/YOUR/HOME/Library/Developer/Xcode/UserData/Provisioning Profiles",
+    "/ABSOLUTE/PATH/TO/YOUR/HOME/Library/MobileDevice/Provisioning Profiles"
+  ],
+  "installed_expires_at": "REPLACE_WITH_VERIFIED_INSTALLED_PROFILE_EXPIRY_UTC"
+}

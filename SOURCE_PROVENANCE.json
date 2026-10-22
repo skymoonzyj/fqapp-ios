@@ -1,0 +1,12 @@
+{
+  "upstream_repository": "https://github.com/ch6vip/fqapp",
+  "upstream_base_commit": "8fdab1938a42caf82b3b08dd44167ed55180b2ab",
+  "ios_source_commit": "0195eea1003da33bd4463a60eb4a55e66ff22701",
+  "application_version": "1.0.127",
+  "application_build": "132",
+  "source_snapshot_date": "2026-10-22",
+  "license": "GPL-3.0",
+  "history_policy": "Complete tracked source snapshot. Prior development history stays local because it previously included personal signing configuration.",
+  "autorenew": "Portable source prepared from the locally verified macOS helper. Personal configuration, signing material, runtime logs and device evidence are excluded.",
+  "publication_scope": "Source code only; no release, tag, IPA or TestFlight publication."
+}

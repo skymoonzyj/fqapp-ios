@@ -1,0 +1,204 @@
+name: iOS checks (local simulator)
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  simulator:
+    # Verified against actions/runner-images on 2026-10-21:
+    # README lists macos-26 as arm64; its image includes Xcode 26.6 (17F113).
+    # https://github.com/actions/runner-images/blob/main/README.md
+    # https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md
+    # Apple supports Xcode 26.6 on macOS 26.2–26.x and iOS 16 deployment:
+    # https://developer.apple.com/xcode/system-requirements
+    # This configuration has not been dispatched/validated on GitHub yet.
+    runs-on: macos-26
+    timeout-minutes: 120
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      CARGO_BUILD_JOBS: '2'
+      RUSTUP_TOOLCHAIN: '1.99.1'
+      IPHONEOS_DEPLOYMENT_TARGET: '16.0'
+      COCOAPODS_DISABLE_STATS: 'true'
+      FFMPEG: /opt/homebrew/bin/ffmpeg
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require verified runner and Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          test "$(sw_vers -productVersion | cut -d. -f1)" = 26
+          test -d "$DEVELOPER_DIR"
+          test "$(xcodebuild -version | head -1)" = 'Xcode 26.6'
+          test "$(xcodebuild -version | tail -1)" = 'Build version 17F113'
+      - name: Install pinned isolated toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/fqapp-tools"
+          # Official archive metadata for this release returned 404 during
+          # local setup; use the verified official Flutter git commit instead.
+          git clone --filter=blob:none --no-checkout https://github.com/flutter/flutter.git "$RUNNER_TEMP/fqapp-tools/flutter"
+          git -C "$RUNNER_TEMP/fqapp-tools/flutter" checkout ee80f08bbf97172ec030b8751ceab557177a34a6
+          echo "$RUNNER_TEMP/fqapp-tools/flutter/bin" >> "$GITHUB_PATH"
+          export PATH="$RUNNER_TEMP/fqapp-tools/flutter/bin:$PATH"
+          flutter --version --machine > "$RUNNER_TEMP/flutter-version.json"
+          python3 - "$RUNNER_TEMP/flutter-version.json" <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1]))
+          assert v['frameworkVersion']=='3.44.6', v['frameworkVersion']
+          assert v['dartSdkVersion'].startswith('3.12.2'), v['dartSdkVersion']
+          PY
+          rustup toolchain install 1.99.1 --profile minimal --component clippy --component rustfmt
+          rustup target add --toolchain 1.99.1 aarch64-apple-ios aarch64-apple-ios-sim
+          cargo install --locked --root "$RUNNER_TEMP/fqapp-tools/codegen" flutter_rust_bridge_codegen --version 2.13.0
+          cargo install --locked --root "$RUNNER_TEMP/fqapp-tools/codegen" cargo-expand --version 1.0.121
+          echo "$RUNNER_TEMP/fqapp-tools/codegen/bin" >> "$GITHUB_PATH"
+          brew install ffmpeg
+          flutter pub get --enforce-lockfile
+      - name: Initialize source-bound check reports
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/ios-checks
+          python3 - <<'PY'
+          import json,pathlib,subprocess
+          commands={'flutter':['flutter','--version'],'dart':['dart','--version'],
+                    'rustc':['rustc','--version'],'cargo':['cargo','--version'],
+                    'frb':['flutter_rust_bridge_codegen','--version'],
+                    'xcode':['xcodebuild','-version'],'cc':['cc','--version'],
+                    'ffmpeg':['ffmpeg','-version'],'node':['node','--version'],
+                    'python':['python3','--version'],'cocoapods':['pod','--version']}
+          versions={name:subprocess.check_output(cmd,text=True,stderr=subprocess.STDOUT).splitlines()[0] for name,cmd in commands.items()}
+          pathlib.Path('build/ios-checks/tools.json').write_text(json.dumps(versions))
+          PY
+          python3 scripts/verify_ios_checks.py --reports-dir build/ios-checks --init build/ios-checks/tools.json
+      - name: Static checks (serial)
+        shell: bash
+        run: |
+          set -euo pipefail
+          gate() { python3 scripts/verify_ios_checks.py --reports-dir build/ios-checks --run-check "$@"; }
+          gate flutter_analyze -- flutter analyze --no-pub
+          gate diff_check -- git diff --check
+          gate rustfmt -- bash -o pipefail -c "git ls-files -z --cached --others --exclude-standard -- 'rust/*.rs' 'rust/**/*.rs' ':!:rust/src/frb_generated.rs' | xargs -0 rustfmt --check --edition 2021 --config skip_children=true"
+          gate clippy -- cargo clippy --manifest-path rust/Cargo.toml --locked --all-targets --features native-media-host-tests -- -D warnings
+      - name: Cross-layer regression (serial)
+        shell: bash
+        run: |
+          set -euo pipefail
+          gate() { python3 scripts/verify_ios_checks.py --reports-dir build/ios-checks --run-check "$@"; }
+          gate flutter_tests -- flutter test --no-pub --machine
+          gate rust_tests -- cargo test --manifest-path rust/Cargo.toml --locked --features native-media-host-tests
+          gate frb_host_tests -- bash scripts/run_rust_host_tests.sh --features native-media-host-tests --machine
+          gate media_encoders -- python3 -c 'import re,subprocess; s=subprocess.check_output(["ffmpeg","-hide_banner","-encoders"],text=True,stderr=subprocess.STDOUT); assert all(re.search(r"\b"+name+r"\b",s) for name in ["libx264","libx265","aac"]), "H.264/H.265/AAC encoders required"; subprocess.run(["cc","--version"],check=True)'
+          gate c_tests -- node --test --test-reporter=tap --test-concurrency=1 test/native_aes_test.cjs test/native_crypto_test.cjs test/native_crypto_media_test.cjs
+          gate verifier_tests -- python3 -m unittest discover -s test -p '*ios*test.py' -v
+          gate build_script_tests -- node --test --test-reporter=tap --test-concurrency=1 test/build_ios_scripts_test.cjs test/build_rust_backend_scripts_test.cjs test/run_rust_host_tests_scripts_test.cjs test/run_ios_integration_scripts_test.cjs
+      - name: Generate self-authored native media fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_ios_checks.py --reports-dir build/ios-checks --run-check media_fixtures -- python3 scripts/generate_ios_media_fixture.py --output build/ios-fixtures/dart-defines.json --report build/ios-fixtures/generation-report.json
+      - name: Build actual locally signed simulator product
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_ios_checks.py --reports-dir build/ios-checks --run-check ios_simulator_build -- bash scripts/build_ios_app.sh --mode simulator --bundle-id com.fqapp.fqapp --build-number 132
+      - name: Create exactly one available iPhone simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,os,subprocess
+          def sim(*args): return subprocess.check_output(['xcrun','simctl',*args],text=True)
+          runtimes=[r for r in json.loads(sim('list','runtimes','--json'))['runtimes'] if r.get('isAvailable') and r['identifier'].startswith('com.apple.CoreSimulator.SimRuntime.iOS-')]
+          assert runtimes, 'No available iOS runtime; no skipped simulator checks'
+          runtime=max(runtimes,key=lambda r:tuple(map(int,r['version'].split('.'))))
+          types=json.loads(sim('list','devicetypes','--json'))['devicetypes']
+          phones=[d for d in types if d.get('productFamily')=='iPhone' and d.get('minRuntimeVersion',0)<=runtime.get('versionCode',2**32) and d.get('maxRuntimeVersion',2**32)>=runtime.get('versionCode',0)]
+          assert phones, 'No compatible iPhone simulator device type'
+          udid=sim('create','fqapp-ci',phones[-1]['identifier'],runtime['identifier']).strip()
+          with open(os.environ['GITHUB_ENV'],'a') as output: output.write('FQAPP_SIMULATOR_UDID='+udid+'\n')
+          PY
+          source "$GITHUB_ENV"
+          xcrun simctl boot "$FQAPP_SIMULATOR_UDID"
+          xcrun simctl bootstatus "$FQAPP_SIMULATOR_UDID" -b
+      - name: Configure isolated native XCTest host
+        id: runner_prepare
+        shell: bash
+        run: |
+          echo 'started=true' >> "$GITHUB_OUTPUT"
+          set +e
+          flutter build ios --simulator --debug --config-only --no-pub -t integration_test/ios_native_host.dart
+          result="$?"
+          echo "config_exit=$result" >> "$GITHUB_OUTPUT"
+          exit "$result"
+      - name: Runner tests on the sole simulator (serial)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_ios_checks.py --reports-dir build/ios-checks --run-check runner_tests -- xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner -configuration Debug -destination "platform=iOS Simulator,id=$FQAPP_SIMULATOR_UDID" -derivedDataPath "$PWD/build/ios-app" CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= ARCHS=arm64 ONLY_ACTIVE_ARCH=YES -jobs 2 -parallel-testing-enabled NO -only-testing:RunnerTests test
+      - name: Restore normal main configuration after native XCTest
+        if: always() && steps.runner_prepare.outputs.started == 'true'
+        env:
+          FQAPP_RUNNER_CONFIG_EXIT: ${{ steps.runner_prepare.outputs.config_exit }}
+        shell: bash
+        run: |
+          set +e
+          flutter build ios --simulator --debug --config-only --no-pub -t lib/main.dart
+          export FQAPP_RUNNER_RESTORE_EXIT="$?"
+          set -e
+          echo "Runner normal-main configuration restore exit: $FQAPP_RUNNER_RESTORE_EXIT"
+          python3 - <<'PY_STATUS'
+          import json,os,pathlib
+          root=pathlib.Path('build/ios-checks')
+          manifest=json.loads((root/'manifest.json').read_text())
+          state={key:manifest[key] for key in ('schema_version','run_id','source_sha','dirty_diff_sha256')}
+          state.update(config_exit=os.environ['FQAPP_RUNNER_CONFIG_EXIT'],
+                       restore_exit=os.environ['FQAPP_RUNNER_RESTORE_EXIT'],
+                       restored_target='lib/main.dart',simulator=os.environ['FQAPP_SIMULATOR_UDID'])
+          (root/'runner_lifecycle.json').write_text(json.dumps(state,indent=2)+'\n')
+          path=root/'runner_tests.json'
+          if path.exists():
+              report=json.loads(path.read_text())
+              report['lifecycle']=state
+              if state['config_exit']!='0' or state['restore_exit']!='0':
+                  report['status']='failed'
+                  report['reason']='Runner host configuration or normal-main configuration restoration failed'
+              path.write_text(json.dumps(report,indent=2)+'\n')
+          PY_STATUS
+          test "$FQAPP_RUNNER_RESTORE_EXIT" = 0
+      - name: Injected UI fixture acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_ios_checks.py --reports-dir build/ios-checks --run-check ios_acceptance -- bash scripts/run_ios_integration.sh --entry acceptance --simulator "$FQAPP_SIMULATOR_UDID"
+      - name: Native iOS core and AVPlayer fixture acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          # This entry also invokes ios_core_test. Fixtures missing, decode
+          # failure or any skipped test are critical; no physical G1 claim.
+          python3 scripts/verify_ios_checks.py --reports-dir build/ios-checks --run-check ios_native_media -- bash scripts/run_ios_integration.sh --entry native-media --simulator "$FQAPP_SIMULATOR_UDID" --fixtures build/ios-fixtures/dart-defines.json
+      - name: Aggregate without counting missing or skipped checks as passed
+        if: always()
+        run: python3 scripts/verify_ios_checks.py --reports-dir build/ios-checks --output build/ios-checks/summary.json
+      - name: Upload minimal reports only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-check-summaries
+          path: build/ios-checks/*.json
+          if-no-files-found: error
+      - name: Shut down owned simulator
+        if: always() && env.FQAPP_SIMULATOR_UDID != ''
+        run: xcrun simctl shutdown "$FQAPP_SIMULATOR_UDID"

@@ -1,0 +1,7 @@
+# Keep generated bridge enums reproducibly formatted by the pinned generator.
+targets:
+  $default:
+    builders:
+      freezed:
+        options:
+          format: true
